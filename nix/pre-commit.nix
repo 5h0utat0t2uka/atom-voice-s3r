@@ -17,12 +17,12 @@ git-hooks.lib.${system}.run {
       files = "^(apps|packages)/.*\\.tsx?$";
       pass_filenames = false;
     };
-    # biome = {
-    #   enable = true;
-    #   name = "biome";
-    #   entry = "${pkgs.biome}/bin/biome check --write --files-ignore-unknown=true --no-errors-on-unmatched";
-    #   pass_filenames = true;
-    # };
+    biome = {
+      enable = true;
+      name = "biome";
+      entry = "${pkgs.biome}/bin/biome check --write --files-ignore-unknown=true --no-errors-on-unmatched";
+      pass_filenames = true;
+    };
     # oxfmt = {
     #   enable = true;
     #   package = pkgs.oxfmt;

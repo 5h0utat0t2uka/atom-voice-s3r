@@ -1,22 +1,21 @@
 packages:
   - "."
 
-allowBuilds:
-  esbuild: false
-  sharp: false
-  unrs-resolver: false
-
-blockExoticSubdeps: true
+ignoredBuiltDependencies:
+  - sharp
+  - unrs-resolver
 
 verifyDepsBeforeRun: install
-
 trustPolicy: no-downgrade
-# trustPolicyExclude:
-#   - semver@6.3.1
-
+blockExoticSubdeps: true
 minimumReleaseAge: 10080
-# minimumReleaseAgeExclude:
-#   - react
-#   - react-dom
-#   - "@types/react"
-#   - "@types/react-dom"
+minimumReleaseAgeExclude:
+  # Next.js 16.3.6 declares SWC optional dependencies for all supported platforms.
+  - '@next/swc-darwin-arm64@16.3.6'
+  - '@next/swc-darwin-x64@16.3.6'
+  - '@next/swc-linux-arm64-gnu@16.3.6'
+  - '@next/swc-linux-arm64-musl@16.3.6'
+  - '@next/swc-linux-x64-gnu@16.3.6'
+  - '@next/swc-linux-x64-musl@16.3.6'
+  - '@next/swc-win32-arm64-msvc@16.3.6'
+  - '@next/swc-win32-x64-msvc@16.3.6'

@@ -1,5 +1,22 @@
 {
   "nodes": {
+    "arduino-ctags": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1479894772,
+        "narHash": "sha256-RKuzrGQUC0N6WHkTXB3OjuKn0E49BpGAyApIJDGamDA=",
+        "owner": "arduino",
+        "repo": "ctags",
+        "rev": "abc8fca7499f44c725122881cd380a88c37abe0e",
+        "type": "github"
+      },
+      "original": {
+        "owner": "arduino",
+        "ref": "5.8-arduino11",
+        "repo": "ctags",
+        "type": "github"
+      }
+    },
     "flake-compat": {
       "flake": false,
       "locked": {
@@ -87,6 +104,7 @@
     },
     "root": {
       "inputs": {
+        "arduino-ctags": "arduino-ctags",
         "flake-utils": "flake-utils",
         "git-hooks": "git-hooks",
         "nixpkgs": "nixpkgs_2"

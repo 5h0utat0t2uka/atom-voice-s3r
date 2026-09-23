@@ -20,7 +20,7 @@ updates:
     commit-message:
       prefix: "chore(actions)"
     assignees:
-      - __ASSIGNEE__
+      - 5h0utat0t2uka
 
   - package-ecosystem: "npm"
     directories:
@@ -47,7 +47,7 @@ updates:
     commit-message:
       prefix: "chore(npm)"
     assignees:
-      - __ASSIGNEE__
+      - 5h0utat0t2uka
 
   - package-ecosystem: "nix"
     directory: "/"
@@ -68,4 +68,4 @@ updates:
     commit-message:
       prefix: "chore(nix)"
     assignees:
-      - __ASSIGNEE__
+      - 5h0utat0t2uka

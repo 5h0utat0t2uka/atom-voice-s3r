@@ -1,0 +1,22 @@
+packages:
+  - "."
+
+allowBuilds:
+  esbuild: false
+  sharp: false
+  unrs-resolver: false
+
+blockExoticSubdeps: true
+
+verifyDepsBeforeRun: install
+
+trustPolicy: no-downgrade
+# trustPolicyExclude:
+#   - semver@6.3.1
+
+minimumReleaseAge: 10080
+# minimumReleaseAgeExclude:
+#   - react
+#   - react-dom
+#   - "@types/react"
+#   - "@types/react-dom"

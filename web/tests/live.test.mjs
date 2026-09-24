@@ -61,6 +61,8 @@ test("Live authentication fails closed and never consumes quota for bad credenti
   assert.equal((await authorizeLive(request({ Origin: "https://other.example" }), config)).status, 403);
   assert.equal((await authorizeLive(request({}, "https://device.example/api/live?model=other"), config)).status, 400);
   assert.equal((await authorizeLive(request({ Upgrade: "http" }), config)).status, 400);
+  assert.equal((await authorizeLive(request({ Authorization: `Bearer ${"b".repeat(64)}` }), config)).status, 401);
+  assert.equal((await authorizeLive(request(), { ...config, apiKey: undefined })).status, 503);
   assert.equal(checks, 0);
   assert.equal(typeof (await authorizeLive(request(), config)), "string");
   assert.equal(checks, 1);
@@ -71,6 +73,17 @@ test("Live authentication fails closed and never consumes quota for bad credenti
   );
   assert.equal(
     (await authorizeLive(request(), { ...config, checkLimit: async () => ({ error: "missing" }) })).status,
+    503,
+  );
+  assert.equal(
+    (
+      await authorizeLive(request(), {
+        ...config,
+        checkLimit: async () => {
+          throw new Error("internal failure");
+        },
+      })
+    ).status,
     503,
   );
 });

@@ -15,7 +15,11 @@ Do not delegate to the backend when: あいさつ、会話中の結果の繰り�
   audio: { format: { type: "audio/pcm", rate: 16000 }, output: { voice: "marin" } },
   delegation: {
     type: "responses",
-    responses: { model: "gpt-5.6-luna", instructions: "日本語で正確かつ簡潔に回答してください。" },
+    responses: {
+      model: "gpt-6-luna",
+      reasoning: { effort: "low" },
+      instructions: "日本語で正確かつ簡潔に回答してください。",
+    },
   },
 };
 export const liveLimitMs = 240_000;

@@ -1,14 +1,13 @@
 # Vercel を Terraform で管理する
 
 このプロジェクトでは、Vercel プロジェクト、`OPENAI_API_KEY` / `DEVICE_TOKEN`、
-`realtime-token` の発行制限を Terraform で管理します。
+`realtime-token` という既存ルールIDによる接続開始の制限を Terraform で管理します。
 アプリのビルド・デプロイは引き続き Vercel の Git 連携で行います。
 Next.js のルートは `web/` で、`vercel_project.app.root_directory = "web"` としています。
 pnpm workspace と lockfile はリポジトリルートに置きます。
 Functions は `resource_config.function_default_regions = ["hnd1"]` で東京を指定し、
 既存の Fluid Compute を有効のまま維持します。リージョン変更は次の Git 連携デプロイから反映されます。
-本体とトークン発行 API の通信距離を短くできますが、API から OpenAI への通信も含むため、
-改善幅は本体の `TOKEN_MS` で確認します。音声自体は本体と OpenAI の直接通信です。
+音声通信は本体 → 東京のVercel Function → OpenAIの経路です。
 
 ## 通常の操作
 
@@ -28,10 +27,6 @@ just infra-apply   # 直前に確認した plan を適用
 Firewall の変更はアプリの再デプロイなしで反映されます。
 環境変数の値を変更したときは、その後にアプリを再デプロイしてください。
 
-`web/` への初回移行では、Root Directory の plan / apply を行ってから、
-移動を含む変更をコミット・push します。設定変更だけでは既存の公開済みデプロイは置き換わりません。
-移行前のコミットには `web/` がないため、そのコミットを新規にデプロイし直さないでください。
-
 ## 秘密情報
 
 次の値は `.enc.env` で管理します。
@@ -41,7 +36,7 @@ Firewall の変更はアプリの再デプロイなしで反映されます。
 | `VERCEL_API_TOKEN` | Terraform が Vercel を操作する認証情報 |
 | `OPENAI_API_KEY` | Vercel の同名環境変数に登録する値 |
 | `DEVICE_TOKEN` | Vercel と本体で共有する認証情報 |
-| `REALTIME_TOKEN_URL` | 本体・疎通検証が利用する設定済み本番 URL |
+| `REALTIME_TOKEN_URL` | 本体が接続先ホストを取り出す既存形式の本番 URL |
 
 SOPS が復号した値は実行プロセスの環境変数として渡します。
 OpenAI キーとデバイストークンは Terraform の `ephemeral` 変数と `value_wo` を使用し、
@@ -50,7 +45,7 @@ plan / state に秘密値を保存しません。`VERCEL_API_TOKEN` も Provider
 
 Vercel の既存環境変数の対象は Production と Preview で、取り込み時に保持しています。
 `project.auto.tfvars.json` にはリソース ID と対象環境だけを記録し、Git で管理します。
-Vercel の API Route は引き続き Production でのみトークンを発行します。
+Vercel の API Route は Production でのみ音声接続を受け付けます。
 
 秘密値を更新する場合は `.enc.env` を編集し、`variables.tf` の `secret_versions` の
 該当番号を増やしてから plan / apply します。write-only の値は読み戻せないため、
@@ -73,19 +68,12 @@ state は暗号化されたバックアップの対象にしてください。
 別の Mac / CI でも実行するようになったら、同じ state を共有できるバックエンドへ
 `terraform init -migrate-state` で移行します。それまではこの Mac から実行します。
 
-## 発行制限と実接続の検証
+## 接続開始の制限
 
-制限は Realtime のトークン発行と GPT-Live のセッション開始で共有し、60秒あたり6回、超過時は HTTP 429 です。`rate_limit_api_id = realtime-token` に対し、SDK が送る
-`x-vercel-rate-limit-key` ごとに集計します。IP アドレスで全デバイスをまとめません。
-集計はリージョン単位で、OpenAI の料金上限を保証するものではありません。
-
-```sh
-just infra-verify        # 認証なし401・認証あり200、短命トークンを1件発行
-just infra-verify-limit  # 次の集計期間まで待機し、6回成功・7回目429を確認
-```
-
-本体と同じ本番 API を呼びます。音声は生成せず、取得した秘密値も表示しません。
-制限テストは実際の発行枠を使うため、実行中は本体を操作せず、終了後は1分待ってください。
+GPT-Liveのセッション開始を60秒あたり6回に制限し、超過時は HTTP 429 を返します。
+既存の `rate_limit_api_id = realtime-token` を維持し、SDKが送る
+`x-vercel-rate-limit-key` ごとに集計します。集計はリージョン単位です。
+ルールがない・確認できない場合は503で接続を拒否します。料金上限を保証する仕組みではありません。
 
 ## 公式資料
 

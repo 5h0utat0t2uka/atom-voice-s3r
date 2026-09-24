@@ -75,7 +75,7 @@ state は暗号化されたバックアップの対象にしてください。
 
 ## 発行制限と実接続の検証
 
-制限は60秒あたり6回、超過時は HTTP 429 です。`rate_limit_api_id = realtime-token` に対し、SDK が送る
+制限は Realtime のトークン発行と GPT-Live のセッション開始で共有し、60秒あたり6回、超過時は HTTP 429 です。`rate_limit_api_id = realtime-token` に対し、SDK が送る
 `x-vercel-rate-limit-key` ごとに集計します。IP アドレスで全デバイスをまとめません。
 集計はリージョン単位で、OpenAI の料金上限を保証するものではありません。
 

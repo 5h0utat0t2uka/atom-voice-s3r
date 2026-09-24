@@ -59,6 +59,24 @@ speech-upload port: speech-build
     --port "$1" \
     build/speech/speech_playback
 
+# 保存済み日本語音声で本体のエコー除去を比較（オフライン）
+aec-build:
+  python3 firmware/aec.py prepare
+  arduino-cli compile --profile {{profile}} \
+    --build-property "tools.ctags.path=$ARDUINO_CTAGS_PATH" \
+    --output-dir build/aec/firmware \
+    build/aec/aec_check
+
+aec-upload port: aec-build
+  arduino-cli upload --profile {{profile}} \
+    --input-dir build/aec/firmware \
+    --port "$1" \
+    build/aec/aec_check
+
+# monitor を終了して実行。テストを開始し、録音と計測ログを Mac に保存
+aec-capture port:
+  python3 -u firmware/aec.py capture "$1"
+
 # 接続情報を含まない Wi-Fi / HTTPS 疎通テストをビルド
 wifi-build:
   python3 firmware/wifi.py prepare
@@ -122,3 +140,21 @@ infra-verify:
 # 本番の発行制限を検証。最大6件の短命トークンを発行（実行中は本体を使わない）
 infra-verify-limit:
   sops exec-env .enc.env 'node infra/verify.mjs --rate-limit'
+
+# GPT-Live: 検証済みの全二重 I2S / AEC を使った連続会話
+live-build:
+  python3 firmware/live.py prepare
+  arduino-cli compile --profile {{profile}} \
+    --build-property "tools.ctags.path=$ARDUINO_CTAGS_PATH" \
+    --output-dir build/live/firmware \
+    build/live/live_chat
+
+live-upload port: live-build
+  arduino-cli upload --profile {{profile}} \
+    --input-dir build/live/firmware \
+    --port "$1" \
+    build/live/live_chat
+
+# 既存の REALTIME_TOKEN_URL と同じホストの /api/live に接続（キーは送らない）
+live-connect port:
+  LIVE_PORT="$1" sops exec-env .enc.env 'python3 -u firmware/live.py configure "$LIVE_PORT"'

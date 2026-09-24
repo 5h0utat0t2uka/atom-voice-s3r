@@ -1,13 +1,13 @@
 # Atom VoiceS3R
 ![Atom VoiceS3R](./docs/C008-C-atom_sound_page_01.png)
 
-Atom VoiceS3R と OpenAI Realtime API を使う音声チャットボットの開発用プロジェクトです。
+Atom VoiceS3R と OpenAI GPT-Live / Realtime API を使う音声チャットボットの開発用プロジェクトです。
 Arduino の操作には Nix / direnv / just を使います。機器の基本動作と音声テストは
 [firmware/README.md](firmware/README.md) を参照してください。
 
 ## ディレクトリと Web 開発
 
-- `web/`: Next.js アプリ、設定、テスト。API は `web/app/api/realtime/token/route.ts`。
+- `web/`: Next.js アプリ、設定、テスト。API は `web/app/api/live/route.ts` と `web/app/api/realtime/token/route.ts`。
 - `firmware/`: Arduino ファームウェアと機器操作ツール。
 - `infra/`: Vercel の Terraform 定義。
 - `nix/`: 共通の開発環境と pre-commit 設定。
@@ -24,6 +24,84 @@ pnpm build
 
 Web 用パッケージの追加は `pnpm --dir web add <package>` を使います。
 SOPS の `.enc.env` は引き続きリポジトリルートで管理します。
+
+## GPT-Live の連続会話
+
+ボタンを1回押すと会話を開始し、もう1回押すと終了します。録音と再生を同時に行い、
+スピーカーの音を Espressif AEC で除去してからマイク音声を送ります。
+`gpt-live-1` が発話のタイミングと割り込みを扱い、知識・推論は `gpt-5.6-luna` に委ねます。
+
+```text
+本体 ─ WSS + DEVICE_TOKEN → Vercel /api/live ─ WSS + API キー → OpenAI GPT-Live
+```
+
+通常の API キーは Vercel 内でのみ使用します。Live WebSocket はサーバーの API キーで接続するため、
+従来の Realtime 短命トークンの発行とは別の中継経路です。東京 `hnd1` の既存設定を使います。
+16 kHz / mono / PCM16 で双方向に通信し、レート変換は行いません。
+
+### デプロイと実機確認
+
+1. 変更を push して Vercel の **Production** にデプロイします。
+2. 既存の `OPENAI_API_KEY` / `DEVICE_TOKEN` と Firewall ルールを使います。環境変数の追加は不要です。
+   `realtime-token` の60秒あたり6回の枠を、Realtime のトークン発行と Live の接続開始で共有します。
+   Terraform の変更はルール説明文だけです。適用する場合は通常どおり `infra-plan` → `infra-apply` を使います。
+3. monitor を終了し、次を実行します。
+
+```sh
+just live-upload /dev/cu.usbmodem1101
+just live-connect /dev/cu.usbmodem1101
+just monitor /dev/cu.usbmodem1101
+```
+
+`live-connect` は `.enc.env` の既存 `REALTIME_TOKEN_URL` からホストを取り出し、
+同じホストの `/api/live` を接続先にします。Wi-Fi とデバイス認証情報は RAM にのみ設定します。
+設定しただけではマイクや OpenAI 接続を開始しません。再起動後は設定を送り直します。
+
+- ボタンを1回押し、`LIVE_LISTENING` を確認してから日本語で話しかけます。
+- 回答中にも話しかけ、相手の発話へ切り替わるかを確認します。保持する再生音声と通信により遅延は残ります。
+- 再度ボタンを押すと録音・再生を停止し、`LIVE_SESSION_CLOSED` → `LIVE_READY` で終了します。
+  monitor の `c` + Enter でも終了できます。
+- 接続開始から最大4分で自動終了します。Vercel Function は最大300秒に設定し、終了通知を待つ余裕を確保します。
+  もう1回押すと新規会話になり、前の会話は引き継ぎません。エラー時にも自動再接続しません。
+
+**開始から終了まで API 利用料金が発生します。** `LIVE_USAGE_SECONDS` は最終通知の会話秒数、
+`LIVE_BACKEND_TOKENS` は委任先モデルの応答ごとのトークン数です。両者は別に課金されます。
+Vercel の中継にも Function の実行時間・転送量が発生します。
+`LIVE_USAGE_UNCONFIRMED` は正常終了の最終通知が届かなかったことを表し、無料だったという意味ではありません。
+
+音声・文字起こし・認証情報をアプリのログやファイルに保存しません。`store: false` で
+Live セッションの保存を無効にします（OpenAI のサービス側の保持方針とは別です）。
+録音/再生キューには上限を設け、終了後に両タスクが停止してから消去します。
+
+`LIVE_AUDIO` は終了時の診断値です。`rx_overflows=0` と、通常の32 ms処理枠を下回る
+`max_aec_us` を確認します。`playback_gaps` は末尾や無音区間のキュー切れも数えるため、
+それだけで音切れと断定せず実際の聞こえ方と合わせて判断します。
+`gain_clipped` が多い場合は、AEC 後の入力ゲイン（現在8倍）の見直しが必要です。
+`FAIL AUDIO_OVERRUN` / `MIC_BACKPRESSURE` / `PLAYBACK_BACKPRESSURE` は音声処理や通信が追いつかなかったため終了した状態です。
+
+`LIVE_WS_HTTP` が404なら Live ルートがまだデプロイされていません。401は認証情報、429は接続回数、
+503は環境変数・Production 環境・Firewallを確認します。101の後の `FAIL LIVE_API` / `RELAY_STOP` は
+上流接続やセッション処理の失敗です。秘密情報や上流エラー本文は本体へ転送しません。
+
+ローカルの `next dev` は Vercel の WebSocket upgrade を提供しません。公式ヘルパーの開発には
+Vercel CLI 54.14.2以降の `vercel dev` が必要ですが、このプロジェクトの認証入口は
+Firewall を必須としているため Production 以外を拒否します。ローカルでは中継の単体テストを使います。
+
+```sh
+pnpm test
+pnpm typecheck
+pnpm build
+python3 -m unittest discover -s firmware -p 'test_*.py'
+just live-build
+```
+
+実装時に API のセッション開始・16 kHz音声送受信・正常終了を確認済みです。
+Vercel デプロイ後の実機では、会話、割り込み、終了、再開、Wi-Fi切断を確認してください。
+
+公式仕様: [Live WebSocket](https://developers.openai.com/api/docs/guides/voice-websockets?api=live)、
+[Live のプロンプト](https://developers.openai.com/api/docs/guides/live-prompting)、
+[Vercel WebSocket](https://vercel.com/docs/functions/websockets)、
+[Vercel upgrade API](https://vercel.com/docs/functions/functions-api-reference/vercel-functions-package#experimental_upgradewebsocket)。
 
 ## Realtime のボタン録音・音声応答
 

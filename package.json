@@ -2,13 +2,16 @@
   "name": "atom-voice-s3r",
   "version": "0.1.0",
   "private": true,
+  "type": "module",
   "scripts": {
+    "test": "node --test tests/*.test.mjs",
     "dev": "next dev",
     "check:pre-commit": "nix develop -c prek run --all-files",
     "build": "next build",
     "start": "next start"
   },
   "dependencies": {
+    "@vercel/firewall": "^1.2.5",
     "next": "16.3.6",
     "react": "19.2.8",
     "react-dom": "19.2.8"

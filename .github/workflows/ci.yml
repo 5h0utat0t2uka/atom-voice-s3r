@@ -57,11 +57,11 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      # - name: Test
-      #   run: pnpm test
+      - name: Test
+        run: pnpm test
 
-      # - name: Typecheck
-      #   run: pnpm typecheck
+      - name: Typecheck
+        run: pnpm typecheck
 
       - name: Check lint script
         id: lint-script

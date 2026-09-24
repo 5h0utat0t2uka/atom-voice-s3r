@@ -1,9 +1,9 @@
-<!-- BEGIN:nextjs-agent-rules -->
+# Project layout
 
-# This is NOT the Next.js you know
+- `web/`: Next.js application, configuration, and tests. Follow `web/AGENTS.md` when editing it.
+- `firmware/`: Arduino firmware and device tools.
+- `infra/`: Terraform configuration for Vercel.
+- `nix/`: Shared development environment and pre-commit hooks.
 
-This version has breaking changes — APIs, conventions, and file structure may all differ from your training data. Read the relevant guide in `node_modules/next/dist/docs/` (resolved from this file's directory; in monorepos the `next` package may not be visible from the repo root) before writing any code. Heed deprecation notices.
-
-This block is written and re-added by `next dev` — verify at `node_modules/next/dist/server/lib/generate-agent-files.js`. Removing it from a diff only re-creates the uncommitted change; committing it with your work keeps the tree clean.
-
-<!-- END:nextjs-agent-rules -->
+Run `pnpm dev`, `pnpm test`, `pnpm typecheck`, and `pnpm build` from the repository root.
+The root package forwards these commands to `web/`. Keep the pnpm workspace and lockfile at the repository root.

@@ -14,7 +14,7 @@ git-hooks.lib.${system}.run {
       enable = true;
       name = "node-test";
       entry = "${fixedNode.pnpm}/bin/pnpm test";
-      files = "^(src/.*\\.tsx?$|tests/.*\\.test\\.mjs$|package\\.json$)";
+      files = "^(web/.*\\.(tsx?|mjs)$|web/package\\.json$|package\\.json$|pnpm-lock\\.yaml$|pnpm-workspace\\.yaml$)";
       pass_filenames = false;
     };
     biome = {

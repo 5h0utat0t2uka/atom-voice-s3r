@@ -23,6 +23,10 @@ resource "vercel_project" "app" {
   root_directory                                    = "web"
   node_version                                      = "24.x"
   automatically_expose_system_environment_variables = true
+  resource_config = {
+    fluid                    = true
+    function_default_regions = ["hnd1"]
+  }
   git_repository = {
     type = "github"
     repo = "5h0utat0t2uka/atom-voice-s3r"

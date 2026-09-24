@@ -1,0 +1,10 @@
+{
+  "file_types": {
+    "Arduino": ["ino"]
+  },
+  "languages": {
+    "Arduino": {
+      "enable_language_server": false
+    }
+  }
+}

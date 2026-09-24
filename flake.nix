@@ -31,6 +31,7 @@
           pkgs.age
           pkgs.betterleaks
           pkgs.prek
+          pkgs.python3
           pkgs.semgrep
           pkgs.sops
           pkgs.typescript-language-server

@@ -1,0 +1,11 @@
+default_profile: atom_voice_s3r
+
+profiles:
+  atom_voice_s3r:
+    fqbn: m5stack:esp32:m5stack_atoms3r:PSRAM=opi,FlashSize=8M,PartitionScheme=default_8MB,USBMode=hwcdc,CDCOnBoot=cdc,EraseFlash=none
+    platforms:
+      - platform: m5stack:esp32 (3.3.9)
+        platform_index_url: https://static-cdn.m5stack.com/resource/arduino/package_m5stack_index.json
+    libraries:
+      - M5Unified (0.2.23)
+      - M5GFX (0.2.30)

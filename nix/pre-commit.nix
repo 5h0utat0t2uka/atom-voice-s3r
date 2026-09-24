@@ -23,18 +23,6 @@ git-hooks.lib.${system}.run {
       entry = "${pkgs.biome}/bin/biome check --write --files-ignore-unknown=true --no-errors-on-unmatched";
       pass_filenames = true;
     };
-    # oxfmt = {
-    #   enable = true;
-    #   package = pkgs.oxfmt;
-    #   settings.mode = "write";
-    # };
-    # oxlint = {
-    #   enable = true;
-    #   name = "oxlint";
-    #   package = pkgs.oxlint;
-    #   entry = "${pkgs.oxlint}/bin/oxlint";
-    #   files = "\\.(js|jsx|mjs|cjs|ts|tsx|mts|cts)$";
-    # };
     betterleaks = {
       enable = true;
       name = "betterleaks";

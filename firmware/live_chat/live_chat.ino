@@ -12,7 +12,9 @@
 #include <esp_transport_ws.h>
 #include <mbedtls/platform_util.h>
 #include "audio_hardware.h"
+#include "device_config.h"
 #include "pcm_queue.h"
+#include "status_display.h"
 
 // Network owns WebSocket on core 0; I2S/AEC stays on core 1 without network waits.
 PcmQueue<4096> microphone;
@@ -21,7 +23,11 @@ std::atomic<bool> stopRequested{false}, audioReady{false}, streaming{false};
 std::atomic<bool> audioDone{true}, networkDone{true};
 std::atomic<const char *> failure{nullptr};
 uint32_t audioBlocks = 0, maxAecUs = 0, playbackGaps = 0, gainClipped = 0;
-char host[256] = {}, deviceToken[65] = {};
+DeviceConfig settings = {};
+enum class ConnectionState { Unconfigured, Wifi, Time, Ready, Retry, Failed };
+ConnectionState connectionState = ConnectionState::Unconfigured;
+uint32_t connectionAt = 0;
+bool saveAfterConnect = false, retrySavedConnection = false;
 char input[1536] = {};
 size_t inputLength = 0;
 bool inputOverflow = false, configured = false, running = false;
@@ -72,7 +78,7 @@ void audioTask(void *) {
     size_t filled = 0;
     bool playing = false;
     uint32_t queuedAt = 0;
-    // 128 blocks = 1280 ms, exactly 40 AEC chunks, matching the verified test.
+    // Warm up the microphone and AEC for 128 blocks (1280 ms / 40 AEC chunks).
     for (size_t block = 0; !stopRequested.load(); ++block) {
       if (block == 128) audioReady = true;
       const size_t available = playback.available();
@@ -98,8 +104,8 @@ void audioTask(void *) {
           const auto started = micros();
           aec_process(aec, mic, reference, clean);
           maxAecUs = std::max(maxAecUs, uint32_t(micros() - started));
-          // Same +18 dB gain as the successful listening comparison, applied
-          // after cancellation (not to the playback reference or analog ADC).
+          // Apply +18 dB after cancellation, leaving the playback reference
+          // and analog ADC gain unchanged.
           if (streaming.load()) {
             for (size_t j = 0; j < chunk; ++j) {
               const int value = int(clean[j]) * 8;
@@ -149,15 +155,15 @@ void networkTask(void *) {
   if (!stopRequested) {
     esp_transport_ssl_crt_bundle_attach(tls, esp_crt_bundle_attach);
     char authorization[80];
-    snprintf(authorization, sizeof(authorization), "Bearer %s", deviceToken);
+    snprintf(authorization, sizeof(authorization), "Bearer %s", settings.token);
     esp_transport_ws_config_t config = {};
     config.ws_path = "/api/live";
     config.auth = authorization;
     config.propagate_control_frames = false;
     const bool setupOk = esp_transport_ws_set_config(socket, &config) == ESP_OK;
     mbedtls_platform_zeroize(authorization, sizeof(authorization));
-    const int result = setupOk ? esp_transport_connect(socket, host, 443, 15000) : -1;
-    Serial.printf("LIVE_WS_HTTP %d\n", esp_transport_ws_get_upgrade_request_status(socket));
+    const int result = setupOk ? esp_transport_connect(socket, settings.host, 443, 15000) : -1;
+    liveLogf("LIVE_WS_HTTP %d\n", esp_transport_ws_get_upgrade_request_status(socket));
     esp_transport_ws_set_auth(socket, nullptr);
     if (result < 0) setFailure("WS_CONNECT");
     else {
@@ -175,7 +181,7 @@ void networkTask(void *) {
           char close[] = "{\"type\":\"close\"}";
           if (!sendFrame(socket, WS_TRANSPORT_OPCODES_TEXT, close, sizeof(close) - 1)) { setFailure("WS_SEND"); break; }
           closing = true; closedAt = millis();
-          Serial.println("LIVE_STOPPING");
+          liveLog("LIVE_STOPPING");
         }
         if (closing && millis() - closedAt > 17000) { setFailure("CLOSE_TIMEOUT"); break; }
         if (!ready && !closing && millis() - connectedAt > 20000) { setFailure("SESSION_TIMEOUT"); break; }
@@ -233,11 +239,11 @@ void networkTask(void *) {
             if (ready || !cJSON_IsNumber(format) || format->valueint != rate) setFailure("SESSION_FORMAT");
             else {
               ready = true;
-              if (!closing) { streaming = true; Serial.println("LIVE_LISTENING"); }
+              if (!closing) { streaming = true; liveLog("LIVE_LISTENING"); }
             }
           } else if (!strcmp(type, "stopping")) {
             stopRequested = true; streaming = false;
-            if (!closing) { closing = true; closedAt = millis(); Serial.println("LIVE_STOPPING"); }
+            if (!closing) { closing = true; closedAt = millis(); liveLog("LIVE_STOPPING"); }
             // Only print fixed protocol values, never arbitrary server text.
             if (strcmp(jsonString(event, "reason"), "button") && strcmp(jsonString(event, "reason"), "time_limit")) {
               setFailure("RELAY_STOP");
@@ -246,7 +252,7 @@ void networkTask(void *) {
             finalized = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(event, "finalized"));
             auto seconds = cJSON_GetObjectItemCaseSensitive(event, "seconds");
             if (finalized && cJSON_IsNumber(seconds) && seconds->valuedouble >= 0) {
-              Serial.printf("LIVE_USAGE_SECONDS %.3f\n", seconds->valuedouble);
+              liveLogf("LIVE_USAGE_SECONDS %.3f\n", seconds->valuedouble);
             }
             cJSON_Delete(event);
             break;
@@ -254,7 +260,7 @@ void networkTask(void *) {
             auto in = cJSON_GetObjectItemCaseSensitive(event, "input_tokens");
             auto out = cJSON_GetObjectItemCaseSensitive(event, "output_tokens");
             auto cached = cJSON_GetObjectItemCaseSensitive(event, "cached_tokens");
-            Serial.printf("LIVE_BACKEND_TOKENS input=%.0f output=%.0f cached=%.0f\n",
+            liveLogf("LIVE_BACKEND_TOKENS input=%.0f output=%.0f cached=%.0f\n",
                 cJSON_IsNumber(in) ? in->valuedouble : -1, cJSON_IsNumber(out) ? out->valuedouble : -1,
                 cJSON_IsNumber(cached) ? cached->valuedouble : -1);
           } else if (!strcmp(type, "error")) setFailure("LIVE_API");
@@ -264,7 +270,7 @@ void networkTask(void *) {
         mbedtls_platform_zeroize(message, sizeof(message));
         length = 0;
       }
-      Serial.println(finalized ? "LIVE_SESSION_CLOSED" : "LIVE_USAGE_UNCONFIRMED");
+      liveLog(finalized ? "LIVE_SESSION_CLOSED" : "LIVE_USAGE_UNCONFIRMED");
       mbedtls_platform_zeroize(message, sizeof(message));
     }
   }
@@ -276,19 +282,78 @@ void networkTask(void *) {
   vTaskDelete(nullptr);
 }
 
-void configure() {
+void beginConnection() {
   configured = false;
+  esp_sntp_stop();
+  WiFi.disconnect();
+  WiFi.begin(settings.ssid, settings.password);
+  connectionAt = millis();
+  connectionState = ConnectionState::Wifi;
+  liveLog("CONNECTING");
+}
+
+void connectionFailed(const char *code) {
+  configured = false;
+  saveAfterConnect = false;
+  esp_sntp_stop();
+  WiFi.disconnect();
+  liveLogf("FAIL %s\n", code);
+  connectionAt = millis();
+  connectionState = retrySavedConnection ? ConnectionState::Retry : ConnectionState::Failed;
+  if (retrySavedConnection) liveLog("WIFI_RETRY_WAIT");
+}
+
+// Keep USB provisioning responsive, even when a hotspot is unavailable at boot.
+// This state machine reconnects Wi-Fi only; it never starts a conversation.
+void updateConnection() {
+  if (running) return;
+  switch (connectionState) {
+    case ConnectionState::Wifi:
+      if (WiFi.status() == WL_CONNECTED) {
+        liveLog("OK WIFI");
+        esp_sntp_set_sync_status(SNTP_SYNC_STATUS_RESET);
+        configTime(0, 0, "time.apple.com", "pool.ntp.org");
+        connectionAt = millis();
+        connectionState = ConnectionState::Time;
+      } else if (millis() - connectionAt >= 30000) connectionFailed("WIFI");
+      break;
+    case ConnectionState::Time:
+      if (WiFi.status() != WL_CONNECTED) { connectionFailed("WIFI_LOST"); break; }
+      // COMPLETED is consumed by this getter; read it only once per poll.
+      if (esp_sntp_get_sync_status() == SNTP_SYNC_STATUS_COMPLETED) {
+        liveLog("OK TIME");
+        if (saveAfterConnect) {
+          if (!settings.save()) { connectionFailed("CONFIG_STORAGE"); break; }
+          liveLog("OK CONFIG_SAVED");
+          saveAfterConnect = false;
+        }
+        retrySavedConnection = true;
+        configured = true;
+        connectionState = ConnectionState::Ready;
+        liveLog("LIVE_READY");
+      } else if (millis() - connectionAt >= 20000) connectionFailed("TIME");
+      break;
+    case ConnectionState::Ready:
+      if (WiFi.status() != WL_CONNECTED) connectionFailed("WIFI_LOST");
+      break;
+    case ConnectionState::Retry:
+      if (millis() - connectionAt >= 30000) beginConnection();
+      break;
+    default: break;
+  }
+}
+
+void configure() {
+  liveLog("CONFIG_ACCEPTED");
   auto *doc = cJSON_ParseWithOpts(input, nullptr, true);
   const char *ssid = jsonString(doc, "ssid"), *password = jsonString(doc, "password");
   const char *server = jsonString(doc, "live_host"), *token = jsonString(doc, "device_token");
-  bool valid = strlen(ssid) >= 1 && strlen(ssid) <= 32 && strlen(password) >= 8 && strlen(password) <= 63
-      && strlen(server) >= 1 && strlen(server) < sizeof(host) && strlen(token) == 64;
-  for (const char *p = server; valid && *p; ++p) valid = isalnum(static_cast<unsigned char>(*p)) || *p == '.' || *p == '-';
-  for (const char *p = token; valid && *p; ++p) valid = (*p >= 'a' && *p <= 'f') || (*p >= '0' && *p <= '9');
-  mbedtls_platform_zeroize(deviceToken, sizeof(deviceToken));
-  if (valid) {
-    strcpy(host, server); strcpy(deviceToken, token);
-    WiFi.disconnect(); WiFi.begin(ssid, password);
+  DeviceConfig candidate = {};
+  candidate.version = 1;
+  if (strlen(ssid) < sizeof(candidate.ssid) && strlen(password) < sizeof(candidate.password)
+      && strlen(server) < sizeof(candidate.host) && strlen(token) < sizeof(candidate.token)) {
+    strcpy(candidate.ssid, ssid); strcpy(candidate.password, password);
+    strcpy(candidate.host, server); strcpy(candidate.token, token);
   }
   for (const char *key : {"ssid", "password", "device_token"}) {
     auto value = cJSON_GetObjectItemCaseSensitive(doc, key);
@@ -296,32 +361,33 @@ void configure() {
   }
   cJSON_Delete(doc);
   mbedtls_platform_zeroize(input, sizeof(input));
-  if (!valid) { Serial.println("FAIL CONFIG"); return; }
-  Serial.println("CONNECTING");
-  const auto started = millis();
-  while (WiFi.status() != WL_CONNECTED && millis() - started < 30000) delay(10);
-  if (WiFi.status() != WL_CONNECTED) { Serial.println("FAIL WIFI"); return; }
-  Serial.println("OK WIFI");
-  esp_sntp_set_sync_status(SNTP_SYNC_STATUS_RESET);
-  configTime(0, 0, "time.apple.com", "pool.ntp.org");
-  const auto syncAt = millis();
-  while (esp_sntp_get_sync_status() != SNTP_SYNC_STATUS_COMPLETED && millis() - syncAt < 20000) delay(10);
-  if (esp_sntp_get_sync_status() != SNTP_SYNC_STATUS_COMPLETED) { Serial.println("FAIL TIME"); return; }
-  Serial.println("OK TIME");
-  configured = true;
-  Serial.println("LIVE_READY");
+  const bool valid = candidate.valid();
+  if (valid) {
+    mbedtls_platform_zeroize(&settings, sizeof(settings));
+    settings = candidate;
+  }
+  mbedtls_platform_zeroize(&candidate, sizeof(candidate));
+  if (!valid) { liveLog("FAIL CONFIG"); return; }
+  saveAfterConnect = true;
+  retrySavedConnection = false;
+  beginConnection();
 }
 
 void startSession() {
-  if (!configured) { Serial.println("LIVE_CONFIG_REQUIRED"); return; }
-  if (WiFi.status() != WL_CONNECTED) { Serial.println("FAIL WIFI_LOST"); return; }
+  if (!configured) {
+    const bool connecting = connectionState == ConnectionState::Wifi || connectionState == ConnectionState::Time
+        || connectionState == ConnectionState::Retry;
+    liveLog(connecting ? "LIVE_CONNECTING" : "LIVE_CONFIG_REQUIRED");
+    return;
+  }
+  if (WiFi.status() != WL_CONNECTED) { liveLog("FAIL WIFI_LOST"); return; }
   microphone.reset(); playback.reset();
   failure = nullptr;
   stopRequested = streaming = audioReady = false;
   audioBlocks = maxAecUs = playbackGaps = gainClipped = 0;
   rxOverflows = 0;
   running = true; audioDone = networkDone = false;
-  Serial.println("LIVE_STARTING");
+  liveLog("LIVE_STARTING");
   if (xTaskCreatePinnedToCore(audioTask, "live-aec", 12288, nullptr, 4, nullptr, 1) != pdPASS) {
     setFailure("AUDIO_TASK"); audioDone = networkDone = true; return;
   }
@@ -334,18 +400,29 @@ void setup() {
   pinMode(amplifierPin, OUTPUT); digitalWrite(amplifierPin, LOW);
   pinMode(buttonPin, INPUT_PULLUP);
   Serial.begin(115200); Serial.setTxTimeoutMs(100);
+  statusDisplay::begin();
   esp_log_level_set("transport_ws", ESP_LOG_NONE);
   esp_log_level_set("transport_base", ESP_LOG_NONE);
   WiFi.persistent(false); WiFi.mode(WIFI_STA); WiFi.setSleep(false);
+  WiFi.setAutoReconnect(false);
   microphone.samples = static_cast<int16_t *>(heap_caps_calloc(4096, 2, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
   playback.samples = static_cast<int16_t *>(heap_caps_calloc(8192, 2, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+  const int loaded = settings.load();
+  if (loaded == 1) {
+    liveLog("CONFIG_LOADED");
+    retrySavedConnection = true;
+    beginConnection();
+  } else {
+    mbedtls_platform_zeroize(&settings, sizeof(settings));
+    liveLog(loaded == 0 ? "LIVE_CONFIG_REQUIRED" : "FAIL CONFIG_STORAGE");
+  }
 }
 
 void loop() {
   static bool connectedBefore = false, buttonBefore = false, buttonRaw = false;
   static uint32_t changedAt = 0;
   const bool connected = static_cast<bool>(Serial);
-  if (connected && !connectedBefore) Serial.println("AVS3R_LIVE_READY 1");
+  if (connected && !connectedBefore) liveLog("AVS3R_LIVE_READY 2");
   connectedBefore = connected;
   const bool pressed = digitalRead(buttonPin) == LOW;
   if (pressed != buttonRaw) { buttonRaw = pressed; changedAt = millis(); }
@@ -353,7 +430,7 @@ void loop() {
     buttonBefore = pressed;
     if (pressed) {
       if (running) { streaming = false; stopRequested = true; }
-      else if (!microphone.samples || !playback.samples) Serial.println("FAIL MEMORY");
+      else if (!microphone.samples || !playback.samples) liveLog("FAIL MEMORY");
       else startSession();
     }
   }
@@ -364,10 +441,10 @@ void loop() {
     if (ch == '\n') {
       if (!inputOverflow && inputLength) {
         input[inputLength] = 0;
-        if (!strcmp(input, "?")) Serial.println("AVS3R_LIVE_READY 1");
+        if (!strcmp(input, "?")) liveLog("AVS3R_LIVE_READY 2");
         else if (!strcmp(input, "c")) { streaming = false; stopRequested = true; }
-        else if (running) Serial.println("FAIL BUSY");
-        else if (!microphone.samples || !playback.samples) Serial.println("FAIL MEMORY");
+        else if (running) liveLog("FAIL BUSY");
+        else if (!microphone.samples || !playback.samples) liveLog("FAIL MEMORY");
         else configure();
       }
       mbedtls_platform_zeroize(input, sizeof(input)); inputLength = 0; inputOverflow = false;
@@ -376,16 +453,17 @@ void loop() {
   }
   if ((inputLength || inputOverflow) && millis() - lastInputAt > 5000) {
     mbedtls_platform_zeroize(input, sizeof(input)); inputLength = 0; inputOverflow = false;
-    Serial.println("FAIL CONFIG_TIMEOUT");
+    liveLog("FAIL CONFIG_TIMEOUT");
   }
   if (running && audioDone && networkDone) {
-    Serial.printf("LIVE_AUDIO blocks=%lu max_aec_us=%lu playback_gaps=%lu gain_clipped=%lu rx_overflows=%lu\n",
+    liveLogf("LIVE_AUDIO blocks=%lu max_aec_us=%lu playback_gaps=%lu gain_clipped=%lu rx_overflows=%lu\n",
                   static_cast<unsigned long>(audioBlocks), static_cast<unsigned long>(maxAecUs),
                   static_cast<unsigned long>(playbackGaps), static_cast<unsigned long>(gainClipped),
                   static_cast<unsigned long>(rxOverflows));
-    if (failure.load()) Serial.printf("FAIL %s\n", failure.load());
+    if (failure.load()) liveLogf("FAIL %s\n", failure.load());
     microphone.reset(); playback.reset(); running = false;
-    Serial.println("LIVE_READY");
+    liveLog("LIVE_READY");
   }
+  updateConnection();
   delay(1);
 }

@@ -3,7 +3,7 @@
 #include <Wire.h>
 #include <driver/i2s_std.h>
 
-// Shared, hardware-verified ES8311 / full-duplex I2S configuration.
+// Hardware-verified ES8311 / full-duplex I2S configuration.
 constexpr uint32_t rate = 16000;
 constexpr size_t framesPerBlock = 160;
 constexpr size_t dmaBlocks = 6;

@@ -13,7 +13,10 @@
 
   outputs = { nixpkgs, flake-utils, git-hooks, arduino-ctags, ... }: flake-utils.lib.eachDefaultSystem (system:
     let
-      pkgs = import nixpkgs { inherit system; };
+      pkgs = import nixpkgs {
+        inherit system;
+        config.allowUnfreePredicate = pkg: nixpkgs.lib.getName pkg == "terraform";
+      };
       fixedNode = import ./nix/fixed-node.nix { inherit pkgs system; };
       arduino = import ./nix/arduino-cli.nix { inherit pkgs arduino-ctags; };
       preCommit = import ./nix/pre-commit.nix { inherit pkgs git-hooks system fixedNode; src = ./.; };
@@ -34,6 +37,7 @@
           pkgs.python3
           pkgs.semgrep
           pkgs.sops
+          pkgs.terraform
           pkgs.typescript-language-server
           pkgs.zizmor
         ];

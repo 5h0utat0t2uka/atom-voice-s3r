@@ -97,3 +97,27 @@ realtime-upload port: realtime-build
 # SOPS の Wi-Fi 情報・DEVICE_TOKEN・REALTIME_TOKEN_URL を USB で渡す
 realtime-connect port:
   REALTIME_PORT="$1" sops exec-env .enc.env 'python3 -u firmware/realtime.py configure "$REALTIME_PORT"'
+
+# Terraform の依存 Provider を取得（秘密情報・Vercel 接続は不要）
+infra-init:
+  @umask 077; terraform -chdir=infra init -input=false
+
+infra-check:
+  terraform -chdir=infra fmt -check
+  terraform -chdir=infra validate
+
+# 既存リソースの import と変更を確認し、適用する plan を保存
+infra-plan:
+  sops exec-env .enc.env 'sh infra/terraform.sh plan -input=false -out=.terraform/reviewed.tfplan'
+
+# infra-plan で確認した plan を適用（アプリのデプロイは Git 連携が担当）
+infra-apply:
+  sops exec-env .enc.env 'sh infra/terraform.sh apply .terraform/reviewed.tfplan'
+
+# 本番 Firewall と認証を検証。短命トークンを1件発行し、音声は生成しない
+infra-verify:
+  sops exec-env .enc.env 'node infra/verify.mjs'
+
+# 本番の発行制限を検証。最大6件の短命トークンを発行（実行中は本体を使わない）
+infra-verify-limit:
+  sops exec-env .enc.env 'node infra/verify.mjs --rate-limit'

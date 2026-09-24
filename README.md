@@ -5,6 +5,26 @@ Atom VoiceS3R と OpenAI Realtime API を使う音声チャットボットの開
 Arduino の操作には Nix / direnv / just を使います。機器の基本動作と音声テストは
 [firmware/README.md](firmware/README.md) を参照してください。
 
+## ディレクトリと Web 開発
+
+- `web/`: Next.js アプリ、設定、テスト。API は `web/app/api/realtime/token/route.ts`。
+- `firmware/`: Arduino ファームウェアと機器操作ツール。
+- `infra/`: Vercel の Terraform 定義。
+- `nix/`: 共通の開発環境と pre-commit 設定。
+
+pnpm workspace と lockfile はリポジトリルートで管理します。以下もルートで実行します。
+
+```sh
+pnpm install --frozen-lockfile
+pnpm dev
+pnpm test
+pnpm typecheck
+pnpm build
+```
+
+Web 用パッケージの追加は `pnpm --dir web add <package>` を使います。
+SOPS の `.enc.env` は引き続きリポジトリルートで管理します。
+
 ## Realtime の音声受信・再生テスト
 
 今回は本体のボタン操作で、固定の日本語テキストを Realtime API に送ります。
@@ -30,25 +50,27 @@ just realtime-init
 
 ### 2. Vercel の設定
 
-このリポジトリを Vercel にインポートし、Framework Preset を Next.js、Root Directory を
-リポジトリルートにします。Production のサーバー環境変数に次の2つを設定します。
-`NEXT_PUBLIC_` は付けません。Vercel は SOPS ファイルを自動復号しません。
+Vercel プロジェクト、環境変数、発行制限は [Terraform](infra/README.md) で管理します。
+既存の Next.js プロジェクトと2つの環境変数を取り込み、アプリのデプロイは Git 連携を使います。
+Vercel の Root Directory は Terraform で `web` に設定します。
+`.enc.env` の `VERCEL_API_TOKEN` で操作し、OpenAI キーとデバイストークンも SOPS から渡します。
 
-| 環境変数 | 値 |
-| --- | --- |
-| `OPENAI_API_KEY` | `.enc.env` と同じ OpenAI API キー |
-| `DEVICE_TOKEN` | `realtime-init` が生成した64桁の値 |
+```sh
+just infra-init
+just infra-check
+just infra-plan
+just infra-apply
+```
 
-`SSID`、`PASS` は Vercel には登録しません。
-System Environment Variables の公開を有効にします
-（`VERCEL` / `VERCEL_ENV` / `VERCEL_PROJECT_PRODUCTION_URL` を利用）。
+`infra-apply` は直前の plan を適用します。通常の変更では plan の差分を先に確認してください。
+発行制限は `infra/main.tf` に定義しています。
 
-Vercel の Firewall → Configure → New Rule で、次を設定して Publish します。
-
-- 条件: `@vercel/firewall`
-- Rate limit ID: `realtime-token`
+- 条件: `@vercel/firewall` の `realtime-token`
 - 発行頻度: 60秒あたり6回
-- 上限超過時: Deny
+- 上限超過時: HTTP 429
+
+`OPENAI_API_KEY` と `DEVICE_TOKEN` は既存の Production / Preview への登録を保持しています。
+`SSID`、`PASS`、`VERCEL_API_TOKEN` は Vercel の環境変数には登録しません。
 
 SDK で認証済みデバイスごとに制限します。ルールがない・確認できない場合は API が503を返し、
 トークンを発行しません。ローカルの `next dev` や Preview でも発行せず503にします。
@@ -95,13 +117,14 @@ just monitor /dev/cu.usbmodem1101
 
 ```sh
 pnpm test
-pnpm exec tsc --noEmit
+pnpm typecheck
 pnpm build
 python3 -m unittest discover -s firmware -p 'test_*.py'
 just realtime-build
 ```
 
-単体テストは OpenAI API を呼びません。本番の発行制限と機器での音声受信はデプロイ後に確認します。
+単体テストは OpenAI API を呼びません。本番の発行制限は `just infra-verify-limit`、
+トークン発行の疎通は `just infra-verify` で検証します。実機での音声受信は別途確認します。
 
 ### 公式資料
 

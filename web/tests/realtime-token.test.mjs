@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { afterEach, mock, test } from "node:test";
-import { issueRealtimeToken, realtimeModel } from "../src/lib/realtime-token.ts";
+import { issueRealtimeToken, realtimeModel } from "../lib/realtime-token.ts";
 
 const deviceToken = "a".repeat(64);
 const options = () => ({ apiKey: "test-api-secret", deviceToken, checkLimit: async () => ({ rateLimited: false }) });

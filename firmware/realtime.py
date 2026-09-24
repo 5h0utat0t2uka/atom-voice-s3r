@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prepare/configure the Realtime playback test without persisting plaintext secrets."""
+"""Prepare/configure Realtime push-to-talk without persisting plaintext secrets."""
 
 import argparse
 import fcntl
@@ -41,20 +41,29 @@ def configuration(env):
 def configure_device(fd, payload, report=print):
     write_all(fd, b"?\n")
     deadline = time.monotonic() + 10
-    while read_line(fd, deadline) != b"AVS3R_REALTIME_READY 1":
-        pass
+    while True:
+        line = read_line(fd, deadline)
+        if line == b"AVS3R_REALTIME_READY 3":
+            break
+        if line.startswith(b"AVS3R_REALTIME_READY "):
+            raise ValueError("ファームウェアを just realtime-upload で更新してください。")
     write_all(fd, payload)
-    deadline = time.monotonic() + 65
+    deadline = time.monotonic() + 150
     messages = {b"CONNECTING": "Wi-Fi 接続中…", b"OK WIFI": "Wi-Fi 接続: OK",
-                b"OK TIME": "時刻同期: OK"}
+                b"OK TIME": "時刻同期: OK", b"MIC_WARMING": "マイク・音声セッション準備中（ボタンを離してください）…",
+                b"OK SESSION": "音声セッション接続: OK"}
     while True:
         line = read_line(fd, deadline)
         if line == b"REALTIME_READY":
-            report("設定完了。前面ボタンで日本語音声を生成・再生します（API 利用料金が発生）。")
+            report("設定完了。前面ボタンを押している間に音声を送信し、離すと回答を生成します（録音は最大10秒、API 利用料金が発生）。")
             return
         if line in messages:
             report(messages[line])
-        elif line in {b"FAIL CONFIG", b"FAIL CONFIG_TIMEOUT", b"FAIL MEMORY", b"FAIL WIFI", b"FAIL TIME"}:
+        elif line in {b"FAIL CONFIG", b"FAIL CONFIG_TIMEOUT", b"FAIL MEMORY", b"FAIL WIFI", b"FAIL TIME",
+                      b"FAIL WIFI_LOST", b"FAIL MIC_INIT", b"FAIL MIC_FORMAT", b"FAIL MIC_CAPTURE", b"FAIL MIC_TIMEOUT",
+                      b"FAIL TOKEN_INIT", b"FAIL TOKEN", b"FAIL TOKEN_FORMAT", b"FAIL WS_CONNECT", b"FAIL WS_READ",
+                      b"FAIL WS_SEND", b"FAIL REALTIME_API", b"FAIL AUDIO_FORMAT", b"FAIL RESPONSE_TIMEOUT",
+                      b"FAIL NETWORK_STOP_TIMEOUT", b"RECONNECT_REQUIRED"}:
             raise ValueError(line.decode("ascii"))
 
 

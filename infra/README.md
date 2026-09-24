@@ -5,6 +5,10 @@
 アプリのビルド・デプロイは引き続き Vercel の Git 連携で行います。
 Next.js のルートは `web/` で、`vercel_project.app.root_directory = "web"` としています。
 pnpm workspace と lockfile はリポジトリルートに置きます。
+Functions は `resource_config.function_default_regions = ["hnd1"]` で東京を指定し、
+既存の Fluid Compute を有効のまま維持します。リージョン変更は次の Git 連携デプロイから反映されます。
+本体とトークン発行 API の通信距離を短くできますが、API から OpenAI への通信も含むため、
+改善幅は本体の `TOKEN_MS` で確認します。音声自体は本体と OpenAI の直接通信です。
 
 ## 通常の操作
 
@@ -91,3 +95,6 @@ just infra-verify-limit  # 次の集計期間まで待機し、6回成功・7回
 - [環境変数の write-only 設定](https://github.com/vercel/terraform-provider-vercel/blob/v5.16.0/docs/resources/project_environment_variable.md)
 - [Terraform の秘密情報管理](https://developer.hashicorp.com/terraform/language/manage-sensitive-data)
 - [Vercel Rate Limiting SDK](https://vercel.com/docs/vercel-firewall/vercel-waf/rate-limiting-sdk)
+
+- [Functions のリージョン設定](https://vercel.com/docs/functions/configuring-functions/region)
+- [Project resource の resource_config](https://github.com/vercel/terraform-provider-vercel/blob/v5.16.0/docs/resources/project.md#nested-schema-for-resource_config)

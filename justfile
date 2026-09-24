@@ -81,6 +81,7 @@ wifi-check port:
 realtime-init:
   sops exec-env .enc.env 'python3 firmware/realtime.py init'
 
+# ボタン録音 → Realtime 音声応答（p コマンドで固定テキストの再生テストも可能）
 realtime-build:
   python3 firmware/realtime.py prepare
   arduino-cli compile --profile {{profile}} \

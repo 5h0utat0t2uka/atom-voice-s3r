@@ -1,0 +1,347 @@
+// Template populated with production sketch functions by test_realtime_firmware.py.
+#include <algorithm>
+#include <atomic>
+#include <cassert>
+#include <cmath>
+#include <cstddef>
+#include <cstdint>
+#include <cstdio>
+#include <cstring>
+#include <map>
+#include <queue>
+#include <functional>
+#include <string>
+#include <vector>
+
+// PRODUCTION_0
+
+uint32_t clockMs = 0;
+uint32_t millis() { return clockMs; }
+void mbedtls_platform_zeroize(void* p, size_t n) { memset(p, 0, n); }
+constexpr int WL_CONNECTED = 3;
+struct { int link = WL_CONNECTED; int status() { return link; } } WiFi;
+struct {
+  std::string output;
+  void println(const char* text) { output += text; output += '\n'; }
+  template<class... T> void printf(const char* format, T... args) {
+    char buffer[1024]; snprintf(buffer, sizeof(buffer), format, args...); output += buffer;
+  }
+} Serial;
+bool fail(const char* code) { Serial.printf("FAIL %s\n", code); return false; }
+struct FakeMic {
+  size_t pending = 0;
+  size_t isRecording() { return pending; }
+  bool record(int16_t* p, size_t n, size_t rate, bool stereo) {
+    assert(pending < 2 && n == captureChunkSamples && rate == sampleRate && !stereo);
+    assert(p == discard || (p >= recording && p + n <= recording + captureMaxSamples));
+    ++pending; return true;
+  }
+  void end() { pending = 0; }
+};
+struct FakeSpeaker {
+  size_t pending = 0;
+  bool running = false;
+  size_t lastEnd = 0;
+  bool begin() { running = true; return true; }
+  size_t isPlaying(int) { return pending; }
+  bool isPlaying() { return pending != 0; }
+  bool playRaw(int16_t* data, size_t n, size_t rate, bool stereo, int repeat, int channel) {
+    assert(running && pending < 2 && rate == sampleRate && !stereo && repeat == 1 && channel == 0);
+    const auto offset = reinterpret_cast<uint8_t*>(data) - audio;
+    assert(static_cast<size_t>(offset) == lastEnd);
+    lastEnd = offset + n * 2;
+    assert(lastEnd <= availableAudio.load()); // Never queue unpublished PCM.
+    ++pending; return true;
+  }
+  void end() { pending = 0; running = false; }
+};
+struct {
+  struct { bool held = false, edge = false; bool isPressed() { return held; } bool wasPressed() { return edge; } } BtnA;
+  FakeMic Mic;
+  FakeSpeaker Speaker;
+} M5;
+
+// PRODUCTION_1
+
+bool prepareMic() {
+  M5.Mic.end(); clearRecording(); captureState = CaptureState::Warming;
+  captureStateAt = captureProgressAt = millis(); return true;
+}
+struct cJSON {
+  bool number = false;
+  double valuedouble = 0;
+  int valueint = 0;
+  bool isNull = false;
+  std::string text;
+  std::map<std::string, cJSON> fields;
+};
+cJSON* cJSON_GetObjectItemCaseSensitive(cJSON* object, const char* key) {
+  if (!object) return nullptr;
+  auto it = object->fields.find(key);
+  return it == object->fields.end() ? nullptr : &it->second;
+}
+bool cJSON_IsNumber(cJSON* value) { return value && value->number; }
+cJSON number(double n) { cJSON value; value.number = true; value.valuedouble = n; value.valueint = n; return value; }
+
+// PRODUCTION_2
+// PRODUCTION_3
+
+void reset() {
+  M5.Mic.end(); M5.Speaker.end(); M5.Speaker.lastEnd = 0;
+  clearRecording(); memset(audio, 0, audioCapacity);
+  clockMs = 1000; ready = true; turnActive = false; speakerStarted = false;
+  abortTurn = false; inputFinished = 0; capturedSamples = 0; releasedAt = 0;
+  availableAudio = startupBytes; networkState = NetworkState::Ready; command = Command::None;
+  captureState = CaptureState::Ready; captureProgressAt = captureStateAt = clockMs;
+  WiFi.link = WL_CONNECTED; M5.BtnA.held = M5.BtnA.edge = false; Serial.output.clear();
+}
+void startVoice() {
+  M5.BtnA.held = M5.BtnA.edge = true; updateCapture(); M5.BtnA.edge = false;
+  assert(turnActive && command == Command::Voice); updateCapture();
+  assert(captureState == CaptureState::Recording);
+}
+void networkScenarios();
+int main() {
+  static_assert(messageCapacity >= 2048);
+  std::vector<int16_t> inputBuffer(captureMaxSamples);
+  std::vector<uint8_t> outputBuffer(audioCapacity);
+  recording = inputBuffer.data(); audio = outputBuffer.data();
+
+  // Warm microphone alone is insufficient: never accept a turn before session.updated.
+  reset(); captureState = CaptureState::Warming; networkState = NetworkState::Connecting;
+  clockMs += micWarmupMs + 1; updateCapture(); assert(captureState == CaptureState::Warming);
+  M5.Mic.pending = 0; networkState = NetworkState::Ready; updateCapture(); assert(captureState == CaptureState::Ready);
+
+  // Warm-up/held-button audio stays private, and a held button cannot start a new turn.
+  reset(); captureState = CaptureState::Warming; M5.BtnA.held = true;
+  clockMs += micWarmupMs + 1; updateCapture(); assert(!turnActive && capturedSamples == 0);
+
+  // Release while an idle request drains discards the turn without committing.
+  reset(); M5.Mic.pending = 1; M5.BtnA.held = M5.BtnA.edge = true; updateCapture();
+  M5.BtnA.held = M5.BtnA.edge = false; M5.Mic.pending = 0; updateCapture();
+  assert(inputFinished == 2 && capturedSamples == 0 && captureState == CaptureState::Off);
+
+  // Short press never publishes microphone samples, even with completed buffers.
+  reset(); startVoice(); updateCapture(); clockMs += 100; M5.Mic.pending = 0;
+  M5.BtnA.held = false; updateCapture(); updateCapture();
+  assert(inputFinished == 2 && capturedSamples == 0);
+
+  // Streaming publishes only completed PCM; pending microphone writes remain private.
+  reset(); startVoice(); updateCapture(); updateCapture();
+  assert(recordedSamples == 2 * captureChunkSamples && capturedSamples == 0);
+  clockMs += 160; M5.Mic.pending = 1; updateCapture();
+  assert(capturedSamples == captureChunkSamples && recordedSamples == 3 * captureChunkSamples);
+  assert(inputFinished == 0); // Uploading does not authorize a response.
+
+  // Release waits for both asynchronous capture buffers before permitting commit.
+  recordedSamples = 10 * captureChunkSamples; M5.BtnA.held = false; updateCapture();
+  updateCapture(); assert(inputFinished == 0 && M5.Mic.pending == 2);
+  M5.Mic.pending = 0; updateCapture(); assert(captureState == CaptureState::Captured);
+  updateCapture(); assert(inputFinished == 1 && capturedSamples == recordedSamples && releasedAt == clockMs);
+
+  // At the 10 s cap, a held button still prevents commit until actual release.
+  reset(); startVoice(); recordedSamples = captureMaxSamples; clockMs += 10000;
+  updateCapture(); updateCapture(); updateCapture(); assert(inputFinished == 0);
+  assert(capturedSamples == captureMaxSamples);
+  M5.BtnA.held = false; updateCapture(); assert(inputFinished == 1);
+
+  // A microphone error cannot erase PCM while the network task may still read it.
+  reset(); startVoice(); recording[0] = 1234; M5.Mic.pending = 2;
+  clockMs += captureTimeoutMs + 1; updateCapture();
+  assert(abortTurn && recording[0] == 1234);
+  networkState = NetworkState::Failed; updatePlayback();
+  assert(recording[0] == 0 && !turnActive && !ready);
+
+  // Playback begins before response.done, uses only published bytes, and waits
+  // for the speaker before erasing or allowing another turn.
+  reset(); assert(beginTurn(false));
+  availableAudio = startupBytes + sampleRate * 2 / 10;
+  updatePlayback(); assert(!speakerStarted);
+  availableAudio = startupBytes + sampleRate * 2 * 300 / 1000;
+  audio[startupBytes] = 42; updatePlayback();
+  assert(speakerStarted && networkState == NetworkState::Busy && M5.Speaker.pending == 2);
+  networkState = NetworkState::Done;
+  for (int i = 0; i < 3; ++i) { M5.Speaker.pending = 0; updatePlayback(); }
+  assert(!turnActive && audio[startupBytes] == 0 && command == Command::Release);
+
+  // A short response starts on Done even when it never reaches the prebuffer threshold.
+  reset(); assert(beginTurn(false)); networkState = NetworkState::Done;
+  availableAudio = startupBytes + 2400; updatePlayback(); assert(speakerStarted);
+
+  // Count starvation once while the queue stays empty; do not fabricate new samples.
+  reset(); assert(beginTurn(false)); availableAudio = startupBytes + 14400; updatePlayback();
+  for (int i = 0; i < 3; ++i) { M5.Speaker.pending = 0; updatePlayback(); }
+  assert(underruns > 0); const auto previous = underruns;
+  updatePlayback(); assert(underruns == previous && queuedAudio == availableAudio.load());
+
+  // Cached tokens are a subset of input, not an additional charge.
+  cJSON response;
+  auto& usage = response.fields["usage"];
+  usage.fields["input_tokens"] = number(150); usage.fields["output_tokens"] = number(200);
+  auto& in = usage.fields["input_token_details"].fields;
+  in["text_tokens"] = number(100); in["audio_tokens"] = number(50); in["cached_tokens"] = number(0);
+  auto& out = usage.fields["output_token_details"].fields;
+  out["text_tokens"] = number(100); out["audio_tokens"] = number(100);
+  Serial.output.clear(); logUsage(&response, "gpt-realtime-2.1");
+  assert(Serial.output.find("ESTIMATED_USD 0.010800") != std::string::npos);
+  in["cached_tokens"] = number(30);
+  in["cached_tokens_details"].fields["text_tokens"] = number(10);
+  in["cached_tokens_details"].fields["audio_tokens"] = number(20);
+  Serial.output.clear(); logUsage(&response, "gpt-realtime-2.1");
+  assert(Serial.output.find("ESTIMATED_USD 0.010132") != std::string::npos);
+  // Unrecognized tokens, missing fields, and models with different pricing are explicit.
+  out.erase("text_tokens"); Serial.output.clear(); logUsage(&response, "gpt-realtime-2.1");
+  assert(Serial.output.find("ESTIMATED_USD unavailable") != std::string::npos);
+  Serial.output.clear(); logUsage(&response, "unknown");
+  assert(Serial.output.find("ESTIMATED_USD unavailable") != std::string::npos);
+  networkScenarios();
+  puts("Firmware capture, streaming playback, session reuse, network failures, buffer lifetime, and usage scenarios passed.");
+}
+
+// Fake server events exercise the production WebSocket session loop. The tests
+// advance time deterministically; no API, microphone, or network is accessed.
+const char* jsonString(cJSON* object, const char* key) {
+  auto value = cJSON_GetObjectItemCaseSensitive(object, key);
+  return value ? value->text.c_str() : "";
+}
+bool cJSON_IsNull(cJSON* value) { return value && value->isNull; }
+cJSON string(const char* value) { cJSON result; result.text = value; return result; }
+std::queue<cJSON> events;
+cJSON* currentEvent = nullptr;
+cJSON* cJSON_ParseWithOpts(const char*, void*, bool) { return currentEvent; }
+void cJSON_Delete(cJSON* value) { delete value; currentEvent = nullptr; }
+using esp_transport_handle_t = void*;
+using ws_transport_opcodes_t = int;
+constexpr int WS_TRANSPORT_OPCODES_TEXT = 1, WS_TRANSPORT_OPCODES_CONT = 0;
+constexpr int WS_TRANSPORT_OPCODES_PING = 9, WS_TRANSPORT_OPCODES_FIN = 128;
+int esp_transport_ws_send_raw(void*, int, char*, int length, int) { return length; }
+int esp_transport_ws_get_read_opcode(void*) { return WS_TRANSPORT_OPCODES_TEXT; }
+int esp_transport_ws_get_read_payload_len(void*) { return 1; }
+bool esp_transport_ws_get_fin_flag(void*) { return true; }
+void delay(int n) { clockMs += n; }
+std::function<void()> tick;
+int esp_transport_poll_read(void*, int timeout) {
+  assert(timeout == 10);
+  clockMs += timeout;
+  if (tick) tick();
+  return events.empty() ? 0 : 1;
+}
+int esp_transport_read(void*, char* chunk, size_t, int timeout) {
+  assert(timeout >= 1000); // Partial-frame reads must not use the short poll timeout.
+  clockMs += 10;
+  if (tick) tick();
+  if (events.empty()) return 0;
+  currentEvent = new cJSON(events.front()); events.pop(); chunk[0] = 'x'; return 1;
+}
+int mbedtls_base64_decode(uint8_t* to, size_t capacity, size_t* decoded, const uint8_t*, size_t) {
+  *decoded = 24000;
+  if (capacity < *decoded) return -1;
+  memset(to, 1, *decoded); return 0;
+}
+int updates = 0, commits = 0, responses = 0, clears = 0;
+size_t sentPcm = 0;
+bool noResponse = false, incompleteResponse = false;
+void emit(const char* type) { cJSON event; event.fields["type"] = string(type); events.push(event); }
+bool sendPcm(void*, size_t offset, size_t count) {
+  assert(offset == sentPcm && offset + count <= capturedSamples.load());
+  assert(count > 0 && count <= sampleRate / 10);
+  sentPcm += count; return true;
+}
+bool sendEvent(void*, const char* json) {
+  std::string body(json);
+  if (body.find("session.update") != std::string::npos) {
+    ++updates;
+    cJSON event; event.fields["type"] = string("session.updated");
+    auto& config = event.fields["session"].fields["audio"].fields;
+    for (auto direction : {"input", "output"}) {
+      config[direction].fields["format"].fields["type"] = string("audio/pcm");
+      config[direction].fields["format"].fields["rate"] = number(24000);
+    }
+    config["input"].fields["turn_detection"].isNull = true;
+    events.push(event);
+  } else if (body.find("input_audio_buffer.commit") != std::string::npos) {
+    assert(inputFinished == 1 && sentPcm == capturedSamples.load());
+    ++commits; emit("input_audio_buffer.committed");
+  } else if (body.find("input_audio_buffer.clear") != std::string::npos) {
+    ++clears; emit("input_audio_buffer.cleared");
+  } else if (body.find("response.create") != std::string::npos) {
+    ++responses;
+    if (!noResponse) {
+      cJSON event; event.fields["type"] = string("response.output_audio.delta");
+      event.fields["delta"] = string("fake-base64"); events.push(event);
+      emit("response.output_audio.done");
+      event = {}; event.fields["type"] = string("response.done");
+      event.fields["response"].fields["status"] = string(incompleteResponse ? "incomplete" : "completed");
+      events.push(event);
+    }
+  }
+  return true;
+}
+
+// PRODUCTION_4
+
+void networkReset() {
+  reset(); networkEnabled = true; networkState = NetworkState::Connecting;
+  events = {}; currentEvent = nullptr; tick = {};
+  updates = commits = responses = clears = 0; sentPcm = 0;
+  noResponse = incompleteResponse = false;
+  static char eventBuffer[messageCapacity + 1]; message = eventBuffer;
+  emit("session.created");
+}
+void networkScenarios() {
+  // Upload before release, flush the last partial chunk, then commit exactly once.
+  // A second question reuses the configured session rather than requesting a token.
+  networkReset(); int turns = 0;
+  tick = [&] {
+    if (networkState == NetworkState::Ready) {
+      if (turns == 0) {
+        assert(beginTurn(true)); capturedSamples = 7200; ++turns;
+      } else if (turns == 1) {
+        assert(beginTurn(false)); ++turns;
+      }
+    }
+    if (turns == 1 && sentPcm == 7200 && inputFinished == 0) {
+      assert(commits == 0 && responses == 0);
+      capturedSamples = 7680; releasedAt = millis(); inputFinished = 1;
+    }
+    if (networkState == NetworkState::Done) {
+      if (turns == 1) command = Command::Release;
+      else networkEnabled = false;
+    }
+  };
+  assert(sessionLoop(nullptr, "gpt-realtime-2.1"));
+  assert(updates == 1 && turns == 2 && commits == 1 && responses == 2 && sentPcm == 7680);
+
+  // A short press clears the server input and never creates a paid response.
+  networkReset(); bool started = false;
+  tick = [&] {
+    if (!started && networkState == NetworkState::Ready) {
+      started = true; assert(beginTurn(true)); inputFinished = 2;
+    }
+    if (networkState == NetworkState::Done) networkEnabled = false;
+  };
+  assert(sessionLoop(nullptr, "gpt-realtime-2.1"));
+  assert(clears == 1 && commits == 0 && responses == 0 && sentPcm == 0);
+
+  // A held button can upload the entire capped recording without committing.
+  networkReset(); started = false;
+  tick = [&] {
+    if (!started && networkState == NetworkState::Ready) {
+      started = true; assert(beginTurn(true)); capturedSamples = captureMaxSamples;
+    }
+    if (sentPcm == captureMaxSamples) networkEnabled = false;
+  };
+  assert(sessionLoop(nullptr, "gpt-realtime-2.1")); assert(commits == 0 && responses == 0);
+
+  // An incomplete or timed-out response fails rather than being retried/charged twice.
+  for (bool timeout : {false, true}) {
+    networkReset(); started = false; noResponse = timeout; incompleteResponse = !timeout;
+    tick = [&] {
+      if (!started && networkState == NetworkState::Ready) {
+        started = true; assert(beginTurn(false));
+      }
+    };
+    assert(!sessionLoop(nullptr, "gpt-realtime-2.1")); assert(responses == 1);
+    assert(Serial.output.find(timeout ? "FAIL RESPONSE_TIMEOUT" : "FAIL RESPONSE_INCOMPLETE") != std::string::npos);
+  }
+}

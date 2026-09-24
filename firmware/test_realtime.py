@@ -32,9 +32,22 @@ class RealtimeTests(unittest.TestCase):
     def test_serial_output_is_allowlisted(self):
         messages = []
         with patch("realtime.write_all"), patch("realtime.read_line", side_effect=[
-                b"AVS3R_REALTIME_READY 1", b"secret", b"OK WIFI", b"OK TIME", b"REALTIME_READY"]):
+                b"AVS3R_REALTIME_READY 3", b"secret", b"OK WIFI", b"OK TIME", b"MIC_WARMING", b"REALTIME_READY"]):
             configure_device(123, b"secret", report=messages.append)
         self.assertNotIn("secret", " ".join(messages))
+
+    def test_old_playback_firmware_is_rejected_before_sending_secrets(self):
+        with patch("realtime.write_all") as write, patch("realtime.read_line", return_value=b"AVS3R_REALTIME_READY 1"):
+            with self.assertRaisesRegex(ValueError, "realtime-upload"):
+                configure_device(123, b"secret")
+            write.assert_called_once_with(123, b"?\n")
+
+    def test_microphone_failure_is_reported_instead_of_waiting_for_ready(self):
+        for code in (b"MIC_INIT", b"MIC_FORMAT", b"MIC_CAPTURE", b"MIC_TIMEOUT", b"WIFI_LOST", b"TOKEN", b"WS_CONNECT", b"REALTIME_API"):
+            with self.subTest(code=code), patch("realtime.write_all"), patch("realtime.read_line", side_effect=[
+                    b"AVS3R_REALTIME_READY 3", b"OK TIME", b"FAIL " + code]):
+                with self.assertRaisesRegex(ValueError, code.decode("ascii")):
+                    configure_device(123, b"secret")
 
     def test_existing_token_is_never_rotated_implicitly(self):
         with patch("realtime.subprocess.run") as run:

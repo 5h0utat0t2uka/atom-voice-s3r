@@ -73,7 +73,7 @@ resource "vercel_firewall_config" "app" {
   rules {
     rule {
       name        = "realtime-token"
-      description = "Limit authenticated Realtime token issuance to 6 requests per 60 seconds."
+      description = "Shared limit: Realtime token issuance and GPT-Live session starts, 6 requests per 60 seconds."
       active      = true
       condition_group = [{
         conditions = [{

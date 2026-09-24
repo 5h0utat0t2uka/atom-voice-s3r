@@ -24,18 +24,18 @@ REQUEST = {
 }
 
 
-def validate_pcm(data):
-    if not data or len(data) % 2 or len(data) > MAX_BYTES:
-        raise ValueError("PCM は 24 kHz / mono / PCM16、空でなく10秒以内である必要があります。")
+def validate_pcm(data, rate=RATE):
+    if rate not in (16000, 24000) or not data or len(data) % 2 or len(data) > rate * 2 * 10:
+        raise ValueError("PCM は 16/24 kHz / mono / PCM16、空でなく10秒以内である必要があります。")
 
 
-def audio_header(data):
-    validate_pcm(data)
+def audio_header(data, rate=RATE):
+    validate_pcm(data, rate)
     # Preserve signed little-endian samples exactly; no gain or resampling.
     samples = [sample[0] for sample in struct.iter_unpack("<h", data)]
     rows = [", ".join(map(str, samples[i:i + 16])) for i in range(0, len(samples), 16)]
     return ("#pragma once\n#include <stdint.h>\n"
-            "// AI-generated Japanese speech; PCM16 mono, 24000 Hz.\n"
+            f"// AI-generated Japanese speech; PCM16 mono, {rate} Hz.\n"
             "static const int16_t speechAudio[] = {\n  "
             + ",\n  ".join(rows) + "\n};\n")
 

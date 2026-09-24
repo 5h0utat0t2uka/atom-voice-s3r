@@ -1,5 +1,9 @@
 # Atom VoiceS3R 動作確認
 
+GPT-Live の連続会話は [ルート README](../README.md#gpt-live-の連続会話) の
+`live-upload` / `live-connect` を使います。音声ドライバーは `audio_hardware.h` で
+AEC 比較テストと共有しています。比較テストはネットワークから切り離して音響を確認するために残しています。
+
 ## Realtime のボタン録音・音声応答
 
 `just realtime-upload` で使うスケッチは `realtime_playback/realtime_playback.ino` です。
@@ -7,6 +11,91 @@
 接続と会話履歴を維持し、待機中の `r` + Enter で再接続・履歴リセットができます。
 書き込み・接続設定・確認ログは [プロジェクト README](../README.md#realtime-のボタン録音音声応答) を参照してください。
 以下の録音単体・固定音声・Wi-Fi の各テストは、切り分け用の独立したスケッチです。
+
+## GPT-Live に向けたエコー除去（AEC）の検証
+
+`aec_check/aec_check.ino` は、同時録音・再生を確認したスケッチを AEC 比較用へ更新したものです。
+旧 `duplex-*` コマンド・スケッチ・収集コードは AEC 版に置き換えました。
+保存済み日本語音声を再生しながら、同じマイク入力の「除去前」「除去後」を本体で取得します。
+ネットワークや OpenAI API は使わず、通常の Realtime ファームウェアとは独立しています。
+
+```sh
+just boards
+# monitor を終了してから、表示されたポートへ書き込み
+just aec-upload /dev/cu.usbmodem1101
+# 書き込み後に起動しない場合は USB を再接続
+just aec-capture /dev/cu.usbmodem1101
+```
+
+録音はコマンドで自動開始し、日本語音声が2回流れます。
+
+1. **1回目は静かにする**：本体の再生音だけをどれだけ除去できるか確認します。
+2. **2回目だけ声を重ねる**：「再生中に話しています」などと話し、自分の声が残るか確認します。
+
+結果は `build/aec/capture-*/` に保存します。
+
+- `raw.wav`: 除去前のマイク入力。
+- `reference.wav`: AEC に与えた再生参照信号。
+- `clean.wav`: 本体の AEC 出力。
+- `raw-listen.wav` / `clean-listen.wav`: 聞き比べ用。同じ一定倍率を両方に適用します。
+  倍率は最大8倍で、両方のピークが26000以下となるよう決め、`capture.txt` に記録します。
+  別々の音量正規化や AGC で減衰量を隠すことはしません。元の3ファイルは無加工です。
+- `capture.txt`: 設定、取得フレーム数、実時間、オーバーフロー、AEC 処理時間、音量・飽和の計測値。
+
+`raw-listen.wav` と `clean-listen.wav` を、Mac の同じ再生音量で比較してください。
+**1回目の本体音声が弱まり、2回目に話した言葉は聞き取れること**が判断の中心です。
+全体が小さくなるだけでは合格にしません。
+
+実装は、固定済みの M5Stack ボードパッケージ3.3.9に含まれる ESP-SR の
+`aec_create(16000, 4, 1, AEC_MODE_FD_HIGH_PERF)` / `aec_process()` を使います。
+残留エコー抑制は `AEC_NLP_LEVEL_NORMAL` とし、別途のノイズ抑制・VAD・AGC は使いません。
+マイクゲインは同時入出力の検証時のままです。
+
+- ESP-SR の仕様に合わせ、I2S と AEC を16 kHz / PCM16に統一します。
+  日本語音声はビルド時に macOS 標準の `afconvert`（SRC quality 127）で24→16 kHzに変換します。
+  元の `build/speech/speech.pcm` は変更せず、新たな音声生成も行いません。
+- 共通 MCLK は4.096 MHz。ES8311 の録音・再生を一緒に初期化し、途中で切り替えません。
+- I2S は左右2スロットですが、マイクは1個です。前回左右が同一であることを確認したため、
+  左スロットを入力に使います。出力は両スロットへ同じ PCM を送ります。
+- TX の6個 × 10 msの DMA リングに対応して再生 PCM を60 ms保持し、参照信号へ渡します。
+  固定済みドライバの DMA 順序を前提とするため、オーバーフローや長い処理停止があれば
+  参照の対応も疑い、検証成功とは扱いません。スピーカー・マイク間の音響遅延そのものは残ります。
+- AEC は問い合わせたチャンク長に合わせ、16バイト境界のバッファを使います。
+  準備・収録の長さも I2S と AEC 両方のチャンク境界に揃え、端数の欠落を避けます。
+- 音声は PSRAM にだけ保持し、処理終了後に USB 転送して消去します。
+  Flash 保存・ネットワーク送信はしません。Mac の保存先は所有者限定の権限で Git 管理対象外です。
+  形式・サイズ・フレーム数・チェックサムを確認し、不完全な転送は WAV にしません。
+
+`AEC_IO_DONE`、`frames=expected`、`rx_overflows=0`、実時間と PCM の時間の一致を確認します。
+`max_aec_us` / `mean_aec_us` は1チャンクの処理時間です（現在の実機では512サンプル＝32 ms）。
+これらは処理の成立を示しますが、音質や声の保持を保証しません。
+TX のすべての無音挿入や欠落を検出するものでもなく、GPT-Live 接続時の負荷・長時間動作は未検証です。
+
+停止は Ctrl+C またはシリアルの `c`。USB が切れても収録は最大約29秒で終了します。
+保存なしなら `just monitor <port>` で前面ボタンを1回押すか `p` + Enter を送ります。
+通常の対話へ戻す場合は `just realtime-upload <port>` → `just realtime-connect <port>` を実行します。
+
+根拠: [ESP-SR AEC API](https://github.com/espressif/esp-sr/blob/master/include/esp32s3/esp_aec.h)、
+[ESP-IDF 5.5 I2S 全二重](https://docs.espressif.com/projects/esp-idf/en/v5.5/esp32s3/api-reference/peripherals/i2s.html#full-duplex)、
+[Atom VoiceS3R 配線](https://docs.m5stack.com/en/core/Atom_EchoS3R)、
+[ES8311 クロック係数](https://github.com/espressif/esp-bsp/blob/master/components/es8311/es8311.c)。
+
+### 実機結果（2026-09-24）
+
+同時入出力だけの初回検証では、9.05秒の取得フレーム数と実時間が一致し、
+受信オーバーフロー・飽和はともに0でした。左右スロットは一致し、ユーザーの試聴でも
+再生音と重ねた声を確認できました。旧スケッチとビルド成果物は AEC 版への置換に伴い削除しました。
+
+AEC 初回の `capture-rl46da34` は、258,560フレーム＝16.16秒を取得し、実時間16.158秒、
+受信オーバーフロー0でした。AEC 処理は32 msの音声あたり平均10.525 ms、最大10.936 ms。
+入力・出力とも飽和0です。
+
+1回目の再生中、録音の4.0〜6.9秒で raw の RMS=361.88、clean の RMS=8.73となり、
+RMS 比は約32.35 dBでした（1回目にユーザーが静かにする条件での測定）。
+ユーザーの試聴では、除去前は本体の声と自分の声の両方が聞こえ、除去後は本体の声が
+ほぼ聞こえなくなり、自分の声は聞こえることを確認しました。
+この条件ではエコー除去とユーザー音声の保持を確認できたため、初回検証は成功とします。
+この単一の測定を、別の音量・距離・部屋での性能保証にはしません。
 
 ## Zed での編集
 

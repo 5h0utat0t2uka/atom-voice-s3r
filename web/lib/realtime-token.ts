@@ -1,4 +1,4 @@
-import { createHash, timingSafeEqual } from "node:crypto";
+import { authenticateDevice, type DeviceOptions, limitDevice, reply } from "./device-auth.ts";
 
 export const realtimeModel = "gpt-realtime-2.1";
 export const sessionConfiguration = {
@@ -12,19 +12,6 @@ export const sessionConfiguration = {
     output: { format: { type: "audio/pcm", rate: 24000 }, voice: "marin" },
   },
 };
-
-type TokenOptions = {
-  apiKey: string | undefined;
-  deviceToken: string | undefined;
-  checkLimit: (deviceId: string) => Promise<{ rateLimited: boolean; error?: string }>;
-};
-
-function reply(body: object, status: number, extraHeaders: Record<string, string> = {}) {
-  return Response.json(body, {
-    status,
-    headers: { "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff", ...extraHeaders },
-  });
-}
 
 // Limit memory before parsing an upstream response. Never log tokens or API error bodies.
 async function readJson(response: Response): Promise<unknown> {
@@ -46,22 +33,10 @@ async function readJson(response: Response): Promise<unknown> {
   return JSON.parse(Buffer.concat(chunks).toString("utf8"));
 }
 
-export async function issueRealtimeToken(request: Request, options: TokenOptions): Promise<Response> {
+export async function issueRealtimeToken(request: Request, options: DeviceOptions): Promise<Response> {
   if (request.method !== "POST") return reply({ error: "method_not_allowed" }, 405, { Allow: "POST" });
-  if (!options.apiKey || options.deviceToken?.length !== 64 || !/^[a-f0-9]{64}$/.test(options.deviceToken)) {
-    return reply({ error: "server_not_configured" }, 503);
-  }
-  const authorization = request.headers.get("authorization") ?? "";
-  const expected = `Bearer ${options.deviceToken}`;
-  if (
-    authorization.length !== expected.length ||
-    !/^Bearer [a-f0-9]{64}$/.test(authorization) ||
-    !timingSafeEqual(Buffer.from(authorization), Buffer.from(expected))
-  ) {
-    return reply({ error: "unauthorized" }, 401);
-  }
-  // This endpoint is for the device, not cross-origin browser requests or client-supplied session settings.
-  if (request.headers.has("origin")) return reply({ error: "forbidden" }, 403);
+  const deviceId = authenticateDevice(request, options);
+  if (deviceId instanceof Response) return deviceId;
   if (request.body !== null) {
     const reader = request.body.getReader();
     try {
@@ -71,14 +46,8 @@ export async function issueRealtimeToken(request: Request, options: TokenOptions
       await reader.cancel();
     }
   }
-  const deviceId = createHash("sha256").update(options.deviceToken).digest("hex");
-  try {
-    const limit = await options.checkLimit(deviceId);
-    if (limit.error) return reply({ error: "rate_limit_unavailable" }, 503);
-    if (limit.rateLimited) return reply({ error: "rate_limited" }, 429, { "Retry-After": "60" });
-  } catch {
-    return reply({ error: "rate_limit_unavailable" }, 503);
-  }
+  const limited = await limitDevice(deviceId, options);
+  if (limited) return limited;
   try {
     const upstream = await fetch("https://api.openai.com/v1/realtime/client_secrets", {
       method: "POST",

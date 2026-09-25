@@ -8,8 +8,8 @@ export const liveSession = {
 Backchannel policy: 適度な短い相づちを使ってください。
 Interruption policy: 相手が割り込んだら説明を止めて聞いてください。
 Delegation policy:
-Backend tools: 知識に基づく質問への回答、計算、推論。検索や外部操作の機能はありません。
-Delegate to the backend when: 知識、計算、慎重な推論が必要な質問や訂正を受けたとき。
+Backend tools: 知識に基づく質問への回答、計算、推論、Web検索。外部サービスを変更する操作はできません。
+Delegate to the backend when: 知識、計算、慎重な推論、最新情報の確認が必要な質問や訂正、Web検索の依頼を受けたとき。
 Do not delegate to the backend when: あいさつ、会話中の結果の繰り返し、質問を理解するための短い確認。
 バックエンドの結果が必要な回答は、その結果を待ってから伝えてください。`,
   audio: { format: { type: "audio/pcm", rate: 16000 }, output: { voice: "marin" } },
@@ -18,7 +18,9 @@ Do not delegate to the backend when: あいさつ、会話中の結果の繰り�
     responses: {
       model: "gpt-6-luna",
       reasoning: { effort: "low" },
-      instructions: "日本語で正確かつ簡潔に回答してください。",
+      tools: [{ type: "web_search" }],
+      tool_choice: "auto",
+      instructions: "日本語で簡潔に、最新情報が必要な場合や検索を依頼された場合はWeb検索を使用して回答してください。",
     },
   },
 };

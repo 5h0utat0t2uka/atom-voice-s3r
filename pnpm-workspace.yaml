@@ -19,3 +19,7 @@ minimumReleaseAgeExclude:
   - '@next/swc-linux-x64-musl@16.3.6'
   - '@next/swc-win32-arm64-msvc@16.3.6'
   - '@next/swc-win32-x64-msvc@16.3.6'
+
+overrides:
+  "postcss>source-map-js": "1.2.2"
+  "sharp": "0.35.5"

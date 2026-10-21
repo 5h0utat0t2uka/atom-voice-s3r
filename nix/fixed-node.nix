@@ -3,26 +3,26 @@
 let
   inherit (pkgs.stdenv.hostPlatform) isDarwin isLinux isAarch64;
 
-  nodeVersion = "24.21.0";
+  nodeVersion = "24.22.1";
   pnpmVersion = "10.34.0";
 
   nodePlatform =
     if isDarwin && isAarch64 then {
       slug = "darwin-arm64";
       ext = "tar.gz";
-      hash = "sha256-vtfupTJeEQjzLOUijd1qXw8IpJnuQqp0Qq6lg3AvYFc=";
+      hash = "sha256-icaCWT12zUQjP6U7FWMmTn3py7GJytFpE1xbT637wKc=";
     } else if isDarwin && !isAarch64 then {
       slug = "darwin-x64";
       ext = "tar.gz";
-      hash = "sha256-FGLLOzBGuBXPjqQ209pFDsGp8R2sflpGsK2lMF1+gJc=";
+      hash = "sha256-0TJVfn7iuFrwiwyMNDOOZcZDDyI40B9ydyjvQtyDsDU=";
     } else if isLinux && isAarch64 then {
       slug = "linux-arm64";
       ext = "tar.xz";
-      hash = "sha256-atEyXtvbVknDebdaI3FHpmbJXU+a6NNA/vLRV10omtI=";
+      hash = "sha256-26v3ocv5R+YFn/rSwnuABB25feoeVTtir97n8T/KM24=";
     } else if isLinux then {
       slug = "linux-x64";
       ext = "tar.xz";
-      hash = "sha256-/Y5Z1aURUQ9qKYr7VI8Yx9KxvkBNi0on2U++SfVsstY=";
+      hash = "sha256-bBcqmrZxj3uAH7WnvUhq8u5eMnWAhqBLhPzOKqdwleY=";
     } else
       throw "Unsupported system: ${system}";
 

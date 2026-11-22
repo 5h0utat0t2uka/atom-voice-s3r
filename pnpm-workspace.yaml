@@ -2,7 +2,7 @@ packages:
   - "web"
 
 catalog:
-  next: "16.4.2"
+  next: "16.4.5"
 
 ignoredBuiltDependencies:
   - sharp
